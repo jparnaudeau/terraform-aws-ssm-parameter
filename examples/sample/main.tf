@@ -6,7 +6,9 @@ provider "aws" {
 }
 
 locals {
-  namespace = format("/%s/%s", var.environment, var.entity)
+  entity    = "ecommerce"
+  namespace = format("/%s/%s", var.environment, local.entity)
+  users     = ["alice", "bob"]
 }
 
 ###############################
@@ -18,19 +20,21 @@ module "ssm_user" {
   namespace = local.namespace
   tags      = var.tags
 
-  parameters = {
-    format("%s_user", var.username) = {
-      description = format("Store username for entity %s", var.entity)
-      value       = var.username
+  parameters = { for user in local.users :
+    format("%s_user", user) => {
+      description = format("Store username for entity %s", local.entity)
+      value       = user
       overwrite   = false
-    },
+    }
   }
 }
 
 ###############################
-# Generate a random password
+# Generate random passwords
 ###############################
-resource "random_password" "password" {
+resource "random_password" "passwords" {
+
+  for_each = toset(local.users)
 
   length           = 16
   special          = true
@@ -53,22 +57,35 @@ module "ssm_user_password" {
   namespace = local.namespace
   tags      = var.tags
 
-  parameters = {
-    format("%s_password", var.username) = {
-      description = format("Store password for username %s", var.username)
-      value       = random_password.password.result
+  parameters = { for user in local.users :
+    format("%s_password", user) => {
+      description = format("Store password for username %s", user)
+      value       = random_password.passwords[user].result
       type        = "SecureString"
       overwrite   = true
-    },
+    }
   }
 }
 
 ###############################
 # Create an encrypted Parameter in SSM ParameterStore
-# Used the default KMS Key
+# Use a custom KMS Key
 ###############################
 data "aws_kms_key" "alias" {
   key_id = "alias/rds-root-key"
+}
+
+resource "random_password" "other_password" {
+
+  length           = 16
+  special          = true
+  upper            = true
+  lower            = true
+  min_upper        = 1
+  number           = true
+  min_numeric      = 1
+  min_special      = 3
+  override_special = "@#%&?"
 }
 
 module "ssm_user_password2" {
@@ -78,9 +95,9 @@ module "ssm_user_password2" {
   tags      = var.tags
 
   parameters = {
-    format("%s_password2", var.username) = {
-      description = format("Store password for username %s", var.username)
-      value       = random_password.password.result
+    "keypass_password" = {
+      description = format("The password of the keypass for entity %s", local.entity)
+      value       = random_password.other_password.result
       type        = "SecureString"
       overwrite   = true
       key_id      = data.aws_kms_key.alias.id
